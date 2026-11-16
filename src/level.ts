@@ -4,7 +4,6 @@ import { addWall } from './nav';
 
 export const scene = new THREE.Scene();
 export const solids: THREE.Box3[] = [];   // block movement (checked in XZ only)
-export const blockers: THREE.Box3[] = []; // block bullets
 
 const geo = new THREE.BoxGeometry(1, 1, 1);
 const mats = new Map<number, THREE.Material>();
@@ -32,7 +31,6 @@ function box(x: number, z: number, w: number, d: number, h: number, color: numbe
     new THREE.Vector3(w + 2 * INK_T, h + 2 * INK_T, d + 2 * INK_T),
   ));
   const b = new THREE.Box3().setFromCenterAndSize(mesh.position, mesh.scale);
-  blockers.push(b);
   if (o.solid ?? y0 === 0) solids.push(b);
   if (o.wall) addWall(b.min.x, b.min.z, b.max.x, b.max.z);
 }
@@ -301,14 +299,4 @@ export function collide(p: THREE.Vector3, r: number) {
       else p.z = b.max.z + r;
     }
   }
-}
-
-// Distance along the ray to the nearest level geometry (Infinity if none).
-const hit = new THREE.Vector3();
-export function rayLevel(ray: THREE.Ray): number {
-  let best = Infinity;
-  for (const b of blockers) {
-    if (ray.intersectBox(b, hit)) best = Math.min(best, hit.distanceTo(ray.origin));
-  }
-  return best;
 }

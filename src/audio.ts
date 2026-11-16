@@ -47,23 +47,10 @@ function tone(type: OscillatorType, f0: number, f1: number, vol: number, dur: nu
   o.stop(t + dur);
 }
 
-// Impact sounds stack three layers: low = weight, mid = body, high = snap.
 export const sfx = {
-  pistol: () => {
-    tone('sine', 160, 45, 0.9, 0.14);
-    hiss(0.6, 0.11, 1400, 'bandpass');
-    hiss(0.5, 0.035, 5000, 'highpass');
-  },
-  hit: () => {
-    tone('sine', 130, 55, 0.6, 0.09);
-    hiss(0.5, 0.08, 800, 'bandpass');
-    tone('square', 2400, 1200, 0.12, 0.025);
-  },
-  splat: () => {
-    tone('sine', 110, 32, 0.9, 0.28);
-    hiss(0.7, 0.25, 500);
-    hiss(0.4, 0.06, 3000, 'highpass');
-  },
+  squirt: () => hiss(0.5, 0.06, 2500, 'bandpass'),
+  cure: () => { tone('triangle', 523, 523, 0.35, 0.12); tone('triangle', 784, 784, 0.35, 0.22, 0.1); },
+  miss: () => tone('square', 110, 90, 0.2, 0.08),
   hurt: () => { tone('sine', 90, 40, 0.8, 0.2); tone('sawtooth', 260, 90, 0.4, 0.25); },
   groan: () => tone('sawtooth', 70 + Math.random() * 40, 50, 0.12, 0.7),
   wave: () => { tone('square', 220, 220, 0.25, 0.15); tone('square', 330, 330, 0.25, 0.3, 0.18); },

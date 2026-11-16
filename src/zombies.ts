@@ -13,7 +13,11 @@ export interface Zombie {
   mats: (THREE.Material | THREE.Material[])[]; // their real materials, restored after a hit flash
   runner: boolean;
   base: number;   // resting x/z scale
-  hp: number;
+  id: number;
+  word: string;
+  typed: number;
+  label: THREE.Sprite;
+  shakeT: number; // seconds of label shake left
   speed: number;
   dmg: number;
   cd: number;     // attack cooldown
@@ -35,7 +39,8 @@ export interface Zombie {
 }
 
 export const zombies: Zombie[] = [];
-const dying: { z: Zombie; t: number }[] = [];
+const curing: { z: Zombie; t: number }[] = [];
+let nextId = 1;
 export const MAX_ZOMBIES = 12;
 
 const WHITE = new THREE.MeshBasicMaterial({ color: 0xffffff });
@@ -71,8 +76,7 @@ const FRONT = [[0, 64], [-3, 56], [3, 56], [0, 34], [-26, 40], [26, 40], [-14, 4
   return Math.hypot(dx, dz) >= 25 && off <= 0.7;
 });
 
-export function spawnZombie(runner = false, speedMul = 1) {
-  if (zombies.length >= MAX_ZOMBIES) return;
+export function spawnZombie(word: string, runner: boolean, walkTime: number) {
   const L = LOOKS[runner ? 1 : 0];
   const g = new THREE.Group();
   g.rotation.order = 'YXZ'; // so rotation.x tips it over relative to its facing
@@ -94,12 +98,15 @@ export function spawnZombie(runner = false, speedMul = 1) {
 
   const [x, z] = FRONT[Math.floor(Math.random() * FRONT.length)];
   g.position.set(x + (Math.random() - 0.5) * 3, 0, z + (Math.random() - 0.5) * 3);
+  const dist = Math.hypot(g.position.x - STALL.x, g.position.z - STALL.z);
 
   scene.add(g);
+  const label = makeLabel(word);
+  scene.add(label);
   zombies.push({
     g, parts, mats: parts.map(m => m.material), runner, base,
-    hp: runner ? 60 : 100,
-    speed: (runner ? 4 : 1.6) * speedMul,
+    id: nextId++, word, typed: 0, label, shakeT: 0,
+    speed: dist * 1.3 / walkTime,
     dmg: runner ? 8 : 10,
     cd: 0, t: Math.random() * 6,
     flash: 0, squash: 0, kx: 0, kz: 0, navT: Math.random() * 0.25, target: [g.position.x, g.position.z],
@@ -108,29 +115,99 @@ export function spawnZombie(runner = false, speedMul = 1) {
 }
 
 export function clearZombies() {
-  for (const z of zombies) scene.remove(z.g);
-  for (const d of dying) scene.remove(d.z.g);
+  for (const z of zombies) { scene.remove(z.g); dropLabel(z); }
+  for (const c of curing) scene.remove(c.z.g);
   zombies.length = 0;
-  dying.length = 0;
+  curing.length = 0;
 }
 
-// Apply a hit: damage, white flash, squash, knockback along (dx, dz). Returns true if it died.
-export function hitZombie(z: Zombie, dmg: number, dx: number, dz: number, force: number): boolean {
-  z.hp -= dmg;
+// --- word labels: a canvas pill per zombie, redrawn only when its typed count or lock changes ---
+const LABEL_H = 64;
+function makeLabel(word: string) {
+  const cv = document.createElement('canvas');
+  const c = cv.getContext('2d')!;
+  c.font = `700 40px ${LABEL_FONT}`;
+  cv.width = Math.ceil(c.measureText(word).width) + 40;
+  cv.height = LABEL_H;
+  const map = new THREE.CanvasTexture(cv);
+  map.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map, sizeAttenuation: false, depthTest: false, transparent: true }));
+  s.scale.set(0.085 * cv.width / LABEL_H, 0.085, 1); // screen-relative: same readable size at any distance
+  s.renderOrder = 1;
+  drawLabel(s, word, 0, false);
+  return s;
+}
+
+const LABEL_FONT = 'Verdana, Arial, sans-serif';
+function drawLabel(s: THREE.Sprite, word: string, typed: number, locked: boolean) {
+  const map = s.material.map!;
+  const cv = map.image as HTMLCanvasElement;
+  const c = cv.getContext('2d')!;
+  c.clearRect(0, 0, cv.width, cv.height);
+  c.fillStyle = '#000';
+  c.beginPath();
+  c.roundRect(0, 0, cv.width, cv.height, 24);
+  c.fill();
+  if (locked) {
+    c.strokeStyle = '#ffd60a';
+    c.lineWidth = 4;
+    c.beginPath();
+    c.roundRect(2, 2, cv.width - 4, cv.height - 4, 22);
+    c.stroke();
+  }
+  c.font = `700 40px ${LABEL_FONT}`;
+  c.textBaseline = 'middle';
+  c.textAlign = 'left';
+  const x = (cv.width - c.measureText(word).width) / 2, done = word.slice(0, typed);
+  c.fillStyle = '#2a9d8f';
+  c.fillText(done, x, LABEL_H / 2 + 2);
+  c.fillStyle = '#fff';
+  c.fillText(word.slice(typed), x + c.measureText(done).width, LABEL_H / 2 + 2);
+  s.renderOrder = locked ? 2 : 1;
+  map.needsUpdate = true;
+}
+
+function dropLabel(z: Zombie) {
+  scene.remove(z.label);
+  z.label.material.map!.dispose();
+  z.label.material.dispose();
+}
+
+export function setTyped(z: Zombie, typed: number, locked: boolean) {
+  drawLabel(z.label, z.word, typed, locked);
+}
+
+export function shakeLabel(z: Zombie) { z.shakeT = 0.2; }
+
+// A correct letter: white flash, squash and a small knockback away from the player. No damage.
+export function flinch(z: Zombie) {
   z.flash = 0.05;
   z.squash = 1;
   for (const m of z.parts) m.material = WHITE;
-  z.kx += dx * force;
-  z.kz += dz * force;
-  if (z.hp > 0) return false;
-  z.kx += dx * 4; // the killing blow throws the body
-  z.kz += dz * 4;
-  zombies.splice(zombies.indexOf(z), 1);
-  dying.push({ z, t: 0 });
-  return true;
+  const p = z.g.position;
+  const dx = p.x - player.pos.x, dz = p.z - player.pos.z, d = Math.hypot(dx, dz) || 1;
+  z.kx += dx / d * 2;
+  z.kz += dz / d * 2;
 }
 
-// Per-frame hit reaction, shared by the living and the dying.
+// Cured: back to a human look, turns away and walks off while shrinking out.
+const HUMAN_SKIN = 0xe0ac69;
+const HUMAN_HEAD = (() => { const s = toon(HUMAN_SKIN); return [s, s, s, s, face('#e0ac69'), s]; })();
+export function cure(z: Zombie) {
+  zombies.splice(zombies.indexOf(z), 1);
+  dropLabel(z);
+  const skin = HUMAN_HEAD[0], shirt = toon(new THREE.Color().setHSL(Math.random(), 0.8, 0.55).getHex());
+  const pants = toon(0x333344);
+  z.mats = [shirt, HUMAN_HEAD, pants, pants, skin, skin];
+  z.parts.forEach((m, i) => { m.material = z.mats[i]; });
+  z.flash = 0;
+  z.parts[4].rotation.x = z.parts[5].rotation.x = 0; // arms down
+  const p = z.g.position;
+  z.g.rotation.y = Math.atan2(p.x - player.pos.x, p.z - player.pos.z);
+  curing.push({ z, t: 0 });
+}
+
+// Per-frame hit reaction, shared by the living and the cured.
 function react(z: Zombie, dt: number) {
   const p = z.g.position;
   p.x += z.kx * dt;
@@ -181,6 +258,12 @@ export function updateZombies(dt: number) {
 
     z.cd -= dt;
     if (d < 1.3 && z.cd <= 0) { hurt(z.dmg); shake(0.035); z.cd = 1; }
+
+    z.label.position.set(p.x, 2.32, p.z);
+    if (z.shakeT > 0) {
+      z.shakeT = Math.max(0, z.shakeT - dt);
+      z.label.center.x = 0.5 + Math.sin(z.shakeT * 70) * 0.06 * (z.shakeT / 0.2);
+    }
   }
 
   // keep zombies from stacking
@@ -217,17 +300,21 @@ export function updateZombies(dt: number) {
     z.lastZ = p.z;
   }
 
-  // the dead: thrown back, knocked flat, then shrink away
-  for (let i = dying.length - 1; i >= 0; i--) {
-    const d = dying[i];
-    d.t += dt;
-    react(d.z, dt);
-    collide(d.z.g.position, 0.4);
-    d.z.g.rotation.x = -1.5 * Math.min(1, d.t / 0.25);
-    if (d.t > 0.3) d.z.g.scale.multiplyScalar(Math.max(0.01, (0.45 - d.t) / 0.15));
-    if (d.t >= 0.45) {
-      scene.remove(d.z.g);
-      dying.splice(i, 1);
+  // the cured: walk off facing away, shrinking out
+  for (let i = curing.length - 1; i >= 0; i--) {
+    const c = curing[i], p = c.z.g.position;
+    c.t += dt;
+    react(c.z, dt);
+    p.x += Math.sin(c.z.g.rotation.y) * 1.6 * dt;
+    p.z += Math.cos(c.z.g.rotation.y) * 1.6 * dt;
+    collide(p, 0.4);
+    c.z.t += dt * 6;
+    c.z.parts[2].rotation.x = Math.sin(c.z.t) * 0.6;
+    c.z.parts[3].rotation.x = -Math.sin(c.z.t) * 0.6;
+    c.z.g.scale.multiplyScalar(Math.max(0.01, 1 - c.t / 0.8));
+    if (c.t >= 0.8) {
+      scene.remove(c.z.g);
+      curing.splice(i, 1);
     }
   }
 

@@ -1,10 +1,15 @@
 import * as THREE from 'three';
 import { scene, buildLevel, solids } from './level';
-import { camera, player, game, resetPlayer, updatePlayer } from './player';
-import { zombies, spawnZombie, updateZombies, clearZombies, MAX_ZOMBIES } from './zombies';
-import { gunScene, gunCam, updatePistol } from './pistol';
-import { feel, updateFx } from './fx';
+import { camera, player, game, resetPlayer, updatePlayer, STALL } from './player';
+import { zombies, spawnZombie, updateZombies, clearZombies, setTyped, flinch, cure, shakeLabel, MAX_ZOMBIES } from './zombies';
+import { gunScene, gunCam, updatePistol, squirt } from './pistol';
+import { feel, updateFx, pop, hitStop } from './fx';
 import { initAudio, sfx } from './audio';
+import { keyChar, typeKey, newStats, type Stats } from './typing';
+import { LEVELS, pickWord, type Lang } from './words';
+import { wordList } from './wordlists';
+import { waveSize, spawnInterval, runnerShare, walkTime } from './pace';
+import { t } from './strings';
 
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
@@ -60,7 +65,13 @@ const overlay = $('overlay'), logo = $('logo'), title = $('title'), body = $('bo
 const waveEl = $('wave'), hpEl = $('hp'), hpBar = $('hp-bar');
 const hurtEl = $('hurt'), bannerEl = $('banner'), hpPanel = $('p-hp');
 dbg.hidden = !DEBUG;
-if (DEBUG) (window as unknown as { dbg: object }).dbg = { player, game, zombies, solids, camera };
+if (DEBUG) {
+  (window as unknown as { dbg: object }).dbg = {
+    player, game, zombies, solids, camera,
+    get lock() { return lock; },
+    get stats() { return stats; },
+  };
+}
 
 const shown = new Map<HTMLElement, string>();
 function put(el: HTMLElement, text: string) {
@@ -95,7 +106,15 @@ function showScreen() {
   }
 }
 
-// --- waves ---
+// --- waves and typing ---
+// Task 7 adds the language and level picker; until then these are fixed.
+let lang: Lang = 'en';
+let levelIndex = 1;
+let list: string[] = [];
+let avgLen = 0;
+let lock: number | null = null;
+let stats: Stats = newStats();
+let used = new Set<string>();
 let toSpawn = 0, spawnT = 0, breakT = 0;
 
 function newGame() {
@@ -105,6 +124,16 @@ function newGame() {
   feel.stop = feel.shake = 0;
   toSpawn = 0;
   breakT = 2;
+  list = wordList(lang, LEVELS[levelIndex]);
+  avgLen = list.reduce((n, w) => n + w.length, 0) / list.length;
+  lock = null;
+  stats = newStats();
+  used = new Set();
+}
+
+function spawnOne(runner: boolean) {
+  const word = pickWord(list, used, new Set(zombies.map(z => z.word[0])), runner);
+  spawnZombie(word, runner, walkTime(word.length, levelIndex, game.wave, runner));
 }
 
 function updateWaves(dt: number) {
@@ -112,24 +141,60 @@ function updateWaves(dt: number) {
     breakT -= dt;
     if (breakT <= 0) {
       game.wave++;
-      toSpawn = 4 + game.wave * 3;                                    // wave size
+      toSpawn = waveSize(game.wave);
       spawnT = 0;
-      banner(`WAVE ${game.wave}!`);
+      banner(t(lang, 'waveStart', game.wave));
       sfx.wave();
     }
   } else if (toSpawn > 0) {
     spawnT -= dt;
     if (spawnT <= 0 && zombies.length < MAX_ZOMBIES) {
-      spawnZombie(
-        Math.random() < Math.min(0.6, (game.wave - 1) * 0.1),         // runner share
-        1 + (game.wave - 1) * 0.07,                                   // speed multiplier
-      );
+      spawnOne(Math.random() < runnerShare(game.wave));
       toSpawn--;
-      spawnT = Math.max(0.4, 1.6 - game.wave * 0.15);                 // spawn interval
+      spawnT = spawnInterval(avgLen, levelIndex, game.wave);
     }
   } else if (zombies.length === 0) {
     breakT = 8;
-    banner('WAVE CLEARED!');
+    player.hp = Math.min(100, player.hp + 25);
+    banner(t(lang, 'waveClear'));
+  }
+}
+
+const head = new THREE.Vector3();
+const headOf = (z: { g: THREE.Group }) => head.set(z.g.position.x, 1.75, z.g.position.z);
+
+function onKey(e: KeyboardEvent) {
+  const ch = keyChar(e);
+  if (!ch) return;
+  e.preventDefault();
+  if (zombies.length === 0) return;
+  const targets = zombies.map(z => ({
+    id: z.id, word: z.word, typed: z.typed,
+    dist: Math.hypot(z.g.position.x - STALL.x, z.g.position.z - STALL.z),
+  }));
+  const r = typeKey(targets, lock, ch);
+  lock = r.lock;
+  stats.keys++;
+  const k = r.result;
+  if (k.kind === 'miss') {
+    sfx.miss();
+    const z = zombies.find(z => z.id === k.id);
+    if (z) { shakeLabel(z); stats.missed.add(z.word); }
+    return;
+  }
+  const z = zombies.find(z => z.id === k.id)!;
+  stats.correct++;
+  z.typed++;
+  setTyped(z, z.typed, lock === z.id);
+  squirt(headOf(z));
+  flinch(z);
+  sfx.squirt();
+  if (k.kind === 'done') {
+    cure(z);
+    stats.cured++;
+    pop('SPLASH!', '#4cc9f0', headOf(z), 1.6);
+    sfx.cure();
+    hitStop(0.05);
   }
 }
 
@@ -151,13 +216,14 @@ overlay.addEventListener('click', start);
 addEventListener('keydown', e => {
   if (e.code === 'Enter') start();
   if (e.code === 'Escape') pause();
+  else if (game.state === 'play') onKey(e);
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
 addEventListener('blur', pause);
 
 if (DEBUG) addEventListener('keydown', e => {
   if (e.code === 'Backquote') dbg.hidden = !dbg.hidden;
-  if (e.code === 'KeyZ') for (let i = 0; i < 30; i++) spawnZombie(i % 3 === 0); // fills to the cap of 30
+  if (e.code === 'KeyZ') for (let i = 0; i < MAX_ZOMBIES; i++) spawnOne(i % 3 === 0); // fills to the cap
 });
 
 resetPlayer();
@@ -176,8 +242,10 @@ function frame(now: number) {
     if (feel.stop > 0) {
       feel.stop -= raw; // hit stop: hold the world on the impact frame
     } else {
-      updatePlayer(dt, null);
+      const locked = zombies.find(z => z.id === lock);
+      updatePlayer(dt, locked ? headOf(locked) : null);
       updatePistol(dt);
+      if (zombies.length > 0) stats.activeMs += dt * 1000;
       updateZombies(dt);
       updateWaves(dt);
       updateFx(dt); // last: applies shake on top of the camera pose
