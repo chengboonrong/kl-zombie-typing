@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { scene, collide, solids } from './level';
-import { player, hurt } from './player';
+import { player, hurt, STALL, BASE_YAW } from './player';
 import { toon, inked, canvasTex } from './toon';
 import { shake } from './fx';
 import { sfx } from './audio';
@@ -36,7 +36,7 @@ export interface Zombie {
 
 export const zombies: Zombie[] = [];
 const dying: { z: Zombie; t: number }[] = [];
-export const MAX_ZOMBIES = 30;
+export const MAX_ZOMBIES = 12;
 
 const WHITE = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
@@ -64,6 +64,13 @@ const LOOKS = [
   look(0xc9a0ff, '#c9a0ff', 0xe63946, 0x222233), // runner
 ];
 
+// Spawn points on the lane ahead of STALL: all within 40 degrees of BASE_YAW and 25 m or more away.
+const FRONT = [[0, 64], [-3, 56], [3, 56], [0, 34], [-26, 40], [26, 40], [-14, 40], [14, 40]].filter(([x, z]) => {
+  const dx = x - STALL.x, dz = z - STALL.z;
+  const a = Math.atan2(-dx, -dz) - BASE_YAW, off = Math.abs(Math.atan2(Math.sin(a), Math.cos(a)));
+  return Math.hypot(dx, dz) >= 25 && off <= 0.7;
+});
+
 export function spawnZombie(runner = false, speedMul = 1) {
   if (zombies.length >= MAX_ZOMBIES) return;
   const L = LOOKS[runner ? 1 : 0];
@@ -85,10 +92,8 @@ export function spawnZombie(runner = false, speedMul = 1) {
   const base = runner ? 0.85 : 1;
   g.scale.set(base, 1, base);
 
-  const ends = [[0, -28], [0, 64], [-40, 40], [40, 40]].filter(([x, z]) => Math.hypot(x - player.pos.x, z - player.pos.z) >= 12);
-  const [x, z] = ends[Math.floor(Math.random() * ends.length)];
-  const spread = (Math.random() - 0.5) * 8;
-  g.position.set(x + (x === 0 ? spread : 0), 0, z + (x === 0 ? 0 : spread));
+  const [x, z] = FRONT[Math.floor(Math.random() * FRONT.length)];
+  g.position.set(x + (Math.random() - 0.5) * 3, 0, z + (Math.random() - 0.5) * 3);
 
   scene.add(g);
   zombies.push({
@@ -227,29 +232,4 @@ export function updateZombies(dt: number) {
   }
 
   if (zombies.length && Math.random() < dt * 0.4) sfx.groan();
-}
-
-// Nearest zombie hit by the ray within maxDist. Head box is tested first.
-const hb = new THREE.Box3(), hp = new THREE.Vector3();
-export function rayZombies(ray: THREE.Ray, maxDist: number, skip = new Set<Zombie>()): { z: Zombie; head: boolean; d: number } | null {
-  let best = maxDist;
-  let res: { z: Zombie; head: boolean; d: number } | null = null;
-  for (const z of zombies) {
-    if (skip.has(z)) continue;
-    const p = z.g.position;
-    let head = true;
-    hb.min.set(p.x - 0.25, 1.5, p.z - 0.25);
-    hb.max.set(p.x + 0.25, 1.95, p.z + 0.25);
-    let h = ray.intersectBox(hb, hp);
-    if (!h) {
-      head = false;
-      hb.min.set(p.x - 0.4, 0, p.z - 0.4);
-      hb.max.set(p.x + 0.4, 1.5, p.z + 0.4);
-      h = ray.intersectBox(hb, hp);
-    }
-    if (!h) continue;
-    const d = hp.distanceTo(ray.origin);
-    if (d < best) { best = d; res = { z, head, d }; }
-  }
-  return res;
 }

@@ -8,7 +8,7 @@ export const feel = { stop: 0, shake: 0 };
 export function hitStop(seconds: number) { feel.stop = Math.max(feel.stop, seconds); }
 export function shake(amount: number) { feel.shake = Math.min(0.06, feel.shake + amount); }
 
-// --- sprites: onomatopoeia bursts and damage numbers ---
+// --- sprites: onomatopoeia bursts ---
 const FONT = 'Impact, "Arial Black", sans-serif';
 const cache = new Map<string, THREE.Texture>();
 function tex(key: string, w: number, h: number, draw: (c: CanvasRenderingContext2D) => void) {
@@ -56,24 +56,6 @@ export function pop(text: string, color: string, pos: THREE.Vector3, size: numbe
   sprite(map, pos, size, 0.35, 0).material.rotation = (Math.random() - 0.5) * 0.5;
 }
 
-// A number that floats up from the hit. Crits are red with a "!".
-export function damageNumber(n: number, crit: boolean, pos: THREE.Vector3) {
-  const text = n + (crit ? '!' : '');
-  const map = tex('#' + text, 128, 64, c => {
-    c.font = `900 46px ${FONT}`;
-    c.textAlign = 'center';
-    c.textBaseline = 'middle';
-    c.lineJoin = 'round';
-    c.lineWidth = 8;
-    c.strokeText(text, 64, 34, 120);
-    c.fillStyle = crit ? '#ff3b30' : '#fff';
-    c.fillText(text, 64, 34, 120);
-  });
-  const s = sprite(map, pos, crit ? 1 : 0.7, 0.6, 1.5);
-  s.position.x += (Math.random() - 0.5) * 0.4;
-  s.position.y += 0.35;
-}
-
 // --- sparks: streaks thrown along a direction, each aligned to its own velocity ---
 const sparkGeo = new THREE.BoxGeometry(0.04, 0.04, 0.3);
 const sparkMats = new Map<number, THREE.MeshBasicMaterial>();
@@ -95,29 +77,8 @@ export function burst(pos: THREE.Vector3, dir: THREE.Vector3, color: number, n: 
   }
 }
 
-const blastSphere = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 12), new THREE.MeshBasicMaterial({
-  color: 0xffd60a, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide,
-}));
-blastSphere.visible = false;
-scene.add(blastSphere);
-let blastT = 0;
-export function blast(pos: THREE.Vector3) {
-  blastSphere.position.copy(pos);
-  blastSphere.scale.setScalar(0.01);
-  blastSphere.material.opacity = 0.35;
-  blastSphere.visible = true;
-  blastT = 0.2;
-}
-
 // Call last each frame: it also applies shake on top of the camera pose.
 export function updateFx(dt: number) {
-  if (blastT > 0) {
-    blastT = Math.max(0, blastT - dt);
-    blastSphere.scale.setScalar(4 * (1 - blastT / 0.2));
-    blastSphere.material.opacity = 0.35 * blastT / 0.2;
-    blastSphere.visible = blastT > 0;
-  }
-
   for (let i = pops.length - 1; i >= 0; i--) {
     const f = pops[i];
     f.t += dt;

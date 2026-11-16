@@ -1,13 +1,10 @@
 import * as THREE from 'three';
 import { scene, buildLevel, solids } from './level';
-import { camera, player, game, keys, resetPlayer, updatePlayer } from './player';
+import { camera, player, game, resetPlayer, updatePlayer } from './player';
 import { zombies, spawnZombie, updateZombies, clearZombies, MAX_ZOMBIES } from './zombies';
-import { weapons, ws, selectWeapon, startReload, updateWeapons, resetWeapons, gunScene, gunCam } from './weapons';
-import { spawnPickup, updatePickups, clearPickups } from './pickups';
+import { gunScene, gunCam, updatePistol } from './pistol';
 import { feel, updateFx } from './fx';
 import { initAudio, sfx } from './audio';
-import { input, initTouch, clearTouch } from './touch';
-import { reloadState, dry, lowAmmo } from './hud';
 
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
@@ -45,8 +42,8 @@ postScene.add(quad);
 const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
 function resize() {
-  // Cap rows regardless of display density, with a lower budget on phones.
-  const pr = Math.min(devicePixelRatio, (input.touch ? 720 : 1080) / innerHeight);
+  // Cap rows regardless of display density.
+  const pr = Math.min(devicePixelRatio, 1080 / innerHeight);
   renderer.setPixelRatio(pr);
   renderer.setSize(innerWidth, innerHeight);
   rt.setSize(Math.round(innerWidth * pr), Math.round(innerHeight * pr));
@@ -60,11 +57,10 @@ resize();
 // --- HUD and screens ---
 const $ = (id: string) => document.getElementById(id)!;
 const overlay = $('overlay'), logo = $('logo'), title = $('title'), body = $('body'), dbg = $('debug');
-const waveEl = $('wave'), killsEl = $('kills'), hpEl = $('hp'), hpBar = $('hp-bar');
-const weaponEl = $('weapon'), ammoEl = $('ammo'), hurtEl = $('hurt'), bannerEl = $('banner');
-const gunEl = $('p-gun'), hpPanel = $('p-hp'), fireBtn = $('fire'), reloadBtn = $('reload'), ring = reloadBtn.querySelector('circle')!;
+const waveEl = $('wave'), hpEl = $('hp'), hpBar = $('hp-bar');
+const hurtEl = $('hurt'), bannerEl = $('banner'), hpPanel = $('p-hp');
 dbg.hidden = !DEBUG;
-if (DEBUG) (window as unknown as { dbg: object }).dbg = { player, game, zombies, weapons, ws, solids, camera };
+if (DEBUG) (window as unknown as { dbg: object }).dbg = { player, game, zombies, solids, camera };
 
 const shown = new Map<HTMLElement, string>();
 function put(el: HTMLElement, text: string) {
@@ -72,20 +68,8 @@ function put(el: HTMLElement, text: string) {
 }
 
 // HUD classes and styles are written only when they change.
-let reloadS = '', ringOff = '', hpScale = '';
-function updateHud(w: (typeof weapons)[number]) {
-  const rs = reloadState(w, ws.reloadT);
-  if (rs !== reloadS) {
-    if (reloadS) reloadBtn.classList.remove(reloadS);
-    if (rs) reloadBtn.classList.add(rs);
-    reloadS = rs;
-  }
-  if (rs === 'busy') {
-    const off = (100 * ws.reloadT / w.reload).toFixed(0); // ring fills as the reload completes
-    if (off !== ringOff) { ringOff = off; ring.style.strokeDashoffset = off; }
-  }
-  fireBtn.classList.toggle('off', dry(w));
-  gunEl.classList.toggle('low', lowAmmo(w));
+let hpScale = '';
+function updateHud() {
   hpPanel.classList.toggle('low', player.hp <= 30);
   const sx = `scaleX(${player.hp / 100})`;
   if (sx !== hpScale) { hpScale = sx; hpBar.style.transform = sx; }
@@ -98,20 +82,16 @@ function banner(text: string) {
   bannerEl.classList.add('show');
 }
 
-const CONTROLS = 'WASD move · SHIFT sprint · SPACE jump<br>MOUSE shoot · R reload · 1–5 weapons · ESC pause';
 function showScreen() {
   const s = game.state;
-  const controls = input.touch ? 'LEFT THUMB move · push up to sprint<br>RIGHT THUMB aim · drag on FIRE to aim while shooting<br>TAP the weapon to switch' : CONTROLS;
-  const verb = input.touch ? 'TAP' : 'CLICK';
-  document.body.classList.toggle('playing', s === 'play');
   overlay.style.display = s === 'play' ? 'none' : 'flex';
-  logo.hidden = s !== 'start';
-  title.hidden = s === 'start';
-  if (s === 'start') { body.innerHTML = `${controls}<br>${verb} TO START`; }
-  if (s === 'pause') { title.innerHTML = 'PAUSED'; body.innerHTML = `${controls}<br>${verb} TO RESUME`; }
+  logo.hidden = s !== 'title';
+  title.hidden = s === 'title';
+  if (s === 'title') body.innerHTML = 'ENTER OR CLICK TO START';
+  if (s === 'pause') { title.innerHTML = 'PAUSED'; body.innerHTML = 'ENTER OR CLICK TO RESUME'; }
   if (s === 'over') {
     title.innerHTML = 'GAME OVER!';
-    body.innerHTML = `WAVES SURVIVED: ${Math.max(0, game.wave - 1)}<br>KILLS: ${game.kills}<br>${verb} TO PLAY AGAIN`;
+    body.innerHTML = `WAVES SURVIVED: ${Math.max(0, game.wave - 1)}<br>ENTER OR CLICK TO PLAY AGAIN`;
   }
 }
 
@@ -120,11 +100,8 @@ let toSpawn = 0, spawnT = 0, breakT = 0;
 
 function newGame() {
   resetPlayer();
-  resetWeapons();
   clearZombies();
-  clearPickups();
   game.wave = 0;
-  game.kills = 0;
   feel.stop = feel.shake = 0;
   toSpawn = 0;
   breakT = 2;
@@ -153,49 +130,30 @@ function updateWaves(dt: number) {
   } else if (zombies.length === 0) {
     breakT = 8;
     banner('WAVE CLEARED!');
-    spawnPickup('health');
-    spawnPickup('ammo');
   }
 }
 
 // --- start and pause ---
 let clickGuard = 0;
-overlay.addEventListener('click', () => {
-  if (performance.now() < clickGuard) return;
+function start() {
+  if (game.state === 'play' || performance.now() < clickGuard) return;
   initAudio();
-  if (input.touch) {
-    if (game.state !== 'pause') newGame();
-    game.state = 'play';
-    showScreen();
-    return;
-  }
-  // Chrome rejects the promise if you re-lock too soon after Esc; ignore that
-  (canvas.requestPointerLock() as unknown as Promise<void> | undefined)?.catch(() => {});
-});
-function pause() {
-  ws.firing = false;
-  keys.clear();
-  clearTouch();
-  if (game.state === 'play') game.state = 'pause';
-  if (document.pointerLockElement) document.exitPointerLock();
+  if (game.state !== 'pause') newGame();
+  game.state = 'play';
   showScreen();
 }
-initTouch(pause, () => { resize(); showScreen(); }, startReload, () => selectWeapon((ws.cur + 1) % weapons.length));
+function pause() {
+  if (game.state !== 'play') return;
+  game.state = 'pause';
+  showScreen();
+}
+overlay.addEventListener('click', start);
+addEventListener('keydown', e => {
+  if (e.code === 'Enter') start();
+  if (e.code === 'Escape') pause();
+});
 document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
 addEventListener('blur', pause);
-document.addEventListener('pointerlockchange', () => {
-  if (input.touch) return;
-  if (document.pointerLockElement) {
-    if (game.state !== 'pause') newGame();
-    game.state = 'play';
-  } else {
-    ws.firing = false;
-    keys.clear();
-    clearTouch();
-    if (game.state === 'play') game.state = 'pause';
-  }
-  showScreen();
-});
 
 if (DEBUG) addEventListener('keydown', e => {
   if (e.code === 'Backquote') dbg.hidden = !dbg.hidden;
@@ -203,7 +161,7 @@ if (DEBUG) addEventListener('keydown', e => {
 });
 
 resetPlayer();
-updatePlayer(0);
+updatePlayer(0, null);
 showScreen();
 
 let last = performance.now(), frames = 0, fpsT = 0, fps = 0;
@@ -218,31 +176,23 @@ function frame(now: number) {
     if (feel.stop > 0) {
       feel.stop -= raw; // hit stop: hold the world on the impact frame
     } else {
-      updatePlayer(dt);
-      updateWeapons(dt);
+      updatePlayer(dt, null);
+      updatePistol(dt);
       updateZombies(dt);
-      updatePickups(dt);
       updateWaves(dt);
       updateFx(dt); // last: applies shake on top of the camera pose
       if (player.hp <= 0) {
         game.state = 'over';
         clickGuard = performance.now() + 800; // don't restart on a panicked click
         sfx.over();
-        ws.firing = false;
-        clearTouch();
-        document.exitPointerLock();
         showScreen();
       }
     }
   }
 
-  const w = weapons[ws.cur];
   put(waveEl, String(game.wave));
-  put(killsEl, String(game.kills));
   put(hpEl, String(player.hp));
-  put(weaponEl, w.name);
-  put(ammoEl, ws.reloadT > 0 ? 'RELOADING…' : `${w.mag} / ${Number.isFinite(w.reserve) ? w.reserve : '∞'}`);
-  updateHud(w);
+  updateHud();
   const hurtO = (player.hurtT / 0.3).toFixed(2);
   if (hurtEl.style.opacity !== hurtO) hurtEl.style.opacity = hurtO;
 
@@ -250,10 +200,7 @@ function frame(now: number) {
     frames++;
     fpsT += raw;
     if (fpsT >= 0.5) { fps = Math.round(frames / fpsT); frames = 0; fpsT = 0; }
-    const p = player.pos;
-    put(dbg,
-      `fps ${fps} | zombies ${zombies.length} | wave ${game.wave} | ` +
-      `pos ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)} | last shot ${game.lastShot}`);
+    put(dbg, `fps ${fps} | zombies ${zombies.length} | wave ${game.wave}`);
   }
 
   renderer.setRenderTarget(rt);
