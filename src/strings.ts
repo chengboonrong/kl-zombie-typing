@@ -20,6 +20,7 @@ const EN = {
   waveStart: 'WAVE {n}!',
   waveClear: 'WAVE CLEARED!',
   lowGfx: 'Low graphics',
+  splash: 'SPLASH!',
 };
 
 export type Key = keyof typeof EN;
@@ -44,6 +45,7 @@ const BM: Record<Key, string> = {
   waveStart: 'GELOMBANG {n}!',
   waveClear: 'GELOMBANG SELESAI!',
   lowGfx: 'Grafik rendah',
+  splash: 'PERCIK!',
 };
 
 export const STRINGS: Record<Lang, Record<Key, string>> = { en: EN, bm: BM };

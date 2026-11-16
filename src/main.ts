@@ -241,7 +241,7 @@ function onKey(e: KeyboardEvent) {
   if (k.kind === 'done') {
     cure(z);
     stats.cured++;
-    pop('SPLASH!', '#4cc9f0', headOf(z), 1.6);
+    pop(t(lang, 'splash'), '#4cc9f0', headOf(z), 1.6);
     sfx.cure();
     hitStop(0.05);
   }
