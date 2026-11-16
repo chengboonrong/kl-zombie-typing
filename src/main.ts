@@ -217,8 +217,8 @@ function onKey(e: KeyboardEvent) {
   if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key.length === 1 || e.key === 'Tab' || e.key === 'Backspace')) e.preventDefault();
   const ch = keyChar(e);
   if (!ch) return;
-  if (zombies.length === 0) return;
-  const targets = zombies.map(z => ({
+  if (!zombies.some(z => z.seen)) return;
+  const targets = zombies.filter(z => z.seen).map(z => ({
     id: z.id, word: z.word, typed: z.typed,
     dist: Math.hypot(z.g.position.x - STALL.x, z.g.position.z - STALL.z),
   }));
@@ -316,7 +316,7 @@ function frame(now: number) {
       const locked = zombies.find(z => z.id === lock);
       updatePlayer(dt, locked ? headOf(locked) : null);
       updatePistol(dt);
-      if (zombies.length > 0) stats.activeMs += dt * 1000;
+      if (zombies.some(z => z.seen)) stats.activeMs += dt * 1000;
       updateZombies(dt);
       updateWaves(dt);
       updateFx(dt); // last: applies shake on top of the camera pose

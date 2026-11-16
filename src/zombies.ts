@@ -17,6 +17,7 @@ export interface Zombie {
   word: string;
   typed: number;
   label: THREE.Sprite;
+  seen: boolean;  // word revealed: close enough with a clear line of sight; latched
   shakeT: number; // seconds of label shake left
   speed: number;
   dmg: number;
@@ -103,11 +104,12 @@ export function spawnZombie(word: string, runner: boolean, walkTime: number) {
   scene.add(g);
   const label = makeLabel(word);
   label.position.set(g.position.x, LABEL_TOP, g.position.z);
+  label.visible = false;
   scene.add(label);
   zombies.push({
     g, parts, mats: parts.map(m => m.material), runner, base,
-    id: nextId++, word, typed: 0, label, shakeT: 0,
-    speed: dist * 1.3 / walkTime,
+    id: nextId++, word, typed: 0, label, seen: false, shakeT: 0,
+    speed: Math.min(dist, REVEAL) * 1.3 / walkTime,
     dmg: runner ? 8 : 10,
     cd: 0, t: Math.random() * 6,
     flash: 0, squash: 0, kx: 0, kz: 0, navT: Math.random() * 0.25, target: [g.position.x, g.position.z],
@@ -225,6 +227,8 @@ function react(z: Zombie, dt: number) {
   z.g.scale.set(wide, 1 - 0.2 * z.squash, wide);
 }
 
+const REVEAL = 30; // m: a word shows once its zombie is this close with a clear line of sight
+const HIDDEN_SPEED = 5; // m/s: unseen zombies hurry so waves don't drag
 const LABEL_TOP = 2.32; // label height over a distant zombie; lowered when close so it stays on screen
 
 export function updateZombies(dt: number) {
@@ -234,13 +238,15 @@ export function updateZombies(dt: number) {
     const dx = player.pos.x - p.x, dz = player.pos.z - p.z;
     const d = Math.hypot(dx, dz) || 1;
 
+    if (!z.seen && d <= REVEAL && clearLine(p.x, p.z, player.pos.x, player.pos.z)) { z.seen = true; z.label.visible = true; }
+
     z.navT -= dt;
     if (z.navT <= 0) { z.target = navTarget(p.x, p.z, player.pos.x, player.pos.z); z.navT += 0.25; }
     const nx = z.target[0] - p.x, nz = z.target[1] - p.z, nd = Math.hypot(nx, nz) || 1;
     z.g.rotation.y = d < 1.3 || clearLine(p.x, p.z, player.pos.x, player.pos.z) ? Math.atan2(dx, dz) : Math.atan2(nx, nz);
     z.step = 0;
     if (d > 0.9) {
-      z.step = Math.min(nd, z.speed * dt);
+      z.step = Math.min(nd, (z.seen ? z.speed : Math.max(z.speed, HIDDEN_SPEED)) * dt);
       const sx = z.sideT > 0 && d >= 1.3 ? z.sideX : nx / nd;
       const sz = z.sideT > 0 && d >= 1.3 ? z.sideZ : nz / nd;
       p.x += sx * z.step;
