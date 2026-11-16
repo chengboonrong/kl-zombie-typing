@@ -35,3 +35,10 @@ test('short picks only words no longer than the median', () => {
   const list = ['ab', 'abc', 'abcd', 'abcdefgh', 'abcdefghij'];
   for (let i = 0; i < 20; i++) assert.ok(pickWord(list, new Set(), new Set(), true).length <= 4);
 });
+test('BM lists contain none of the removed non-standard or sensitive words', () => {
+  const banned = new Set(['bandaraya', 'pasaraya', 'segitiga', 'pembolehubah', 'gotong', 'royong', 'atuk', 'gemuk', 'kurus']);
+  for (const level of LEVELS) {
+    const list: string[] = JSON.parse(readFileSync(`words/bm/${level}.json`, 'utf8'));
+    for (const w of list) assert.ok(!banned.has(w), `bm/${level}: ${w}`);
+  }
+});

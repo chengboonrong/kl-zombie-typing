@@ -102,7 +102,7 @@ export function spawnZombie(word: string, runner: boolean, walkTime: number) {
 
   scene.add(g);
   const label = makeLabel(word);
-  label.position.set(g.position.x, 2.32, g.position.z);
+  label.position.set(g.position.x, LABEL_TOP, g.position.z);
   scene.add(label);
   zombies.push({
     g, parts, mats: parts.map(m => m.material), runner, base,
@@ -225,6 +225,8 @@ function react(z: Zombie, dt: number) {
   z.g.scale.set(wide, 1 - 0.2 * z.squash, wide);
 }
 
+const LABEL_TOP = 2.32; // label height over a distant zombie; lowered when close so it stays on screen
+
 export function updateZombies(dt: number) {
   for (const z of zombies) {
     react(z, dt);
@@ -260,7 +262,7 @@ export function updateZombies(dt: number) {
     z.cd -= dt;
     if (d < 1.3 && z.cd <= 0) { hurt(z.dmg); shake(0.035); z.cd = 1; }
 
-    z.label.position.set(p.x, 2.32, p.z);
+    z.label.position.set(p.x, Math.min(LABEL_TOP, 1.65 + 0.5 * d), p.z); // eye height 1.65 in player.ts
     if (z.shakeT > 0) {
       z.shakeT = Math.max(0, z.shakeT - dt);
       z.label.center.x = 0.5 + Math.sin(z.shakeT * 70) * 0.06 * (z.shakeT / 0.2);

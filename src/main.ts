@@ -3,7 +3,7 @@ import { scene, buildLevel, solids } from './level';
 import { camera, player, game, resetPlayer, updatePlayer, STALL } from './player';
 import { zombies, spawnZombie, updateZombies, clearZombies, setTyped, flinch, cure, shakeLabel, MAX_ZOMBIES } from './zombies';
 import { gunScene, gunCam, updatePistol, squirt } from './pistol';
-import { feel, updateFx, pop, hitStop } from './fx';
+import { feel, updateFx, pop, hitStop, shake } from './fx';
 import { initAudio, sfx } from './audio';
 import { keyChar, typeKey, newStats, wpm, accuracy, type Stats } from './typing';
 import { LEVELS, pickWord, type Lang } from './words';
@@ -213,9 +213,10 @@ const head = new THREE.Vector3();
 const headOf = (z: { g: THREE.Group }) => head.set(z.g.position.x, 1.75, z.g.position.z);
 
 function onKey(e: KeyboardEvent) {
+  // swallow ' and / (Firefox quick-find), Tab and Backspace too, not just letters
+  if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key.length === 1 || e.key === 'Tab' || e.key === 'Backspace')) e.preventDefault();
   const ch = keyChar(e);
   if (!ch) return;
-  e.preventDefault();
   if (zombies.length === 0) return;
   const targets = zombies.map(z => ({
     id: z.id, word: z.word, typed: z.typed,
@@ -228,7 +229,7 @@ function onKey(e: KeyboardEvent) {
   if (k.kind === 'miss') {
     sfx.miss();
     const z = zombies.find(z => z.id === k.id);
-    if (z) { shakeLabel(z); stats.missed.add(z.word); }
+    if (z) { shakeLabel(z); stats.missed.add(z.word); } else shake(0.01);
     return;
   }
   const z = zombies.find(z => z.id === k.id)!;
@@ -280,7 +281,7 @@ addEventListener('keydown', e => {
     const act = ({ ArrowLeft: 'lang-prev', ArrowRight: 'lang-next', ArrowUp: 'level-up', ArrowDown: 'level-down' } as Record<string, string>)[e.code];
     if (act) { e.preventDefault(); ACTIONS[act](); return; }
   }
-  if (e.code === 'Enter') start();
+  if (e.key === 'Enter') start();
   if (e.code === 'Escape') {
     if (game.state === 'over' && performance.now() >= clickGuard) { game.state = 'title'; showScreen(); }
     else pause();
@@ -291,7 +292,7 @@ addEventListener('blur', pause);
 
 if (DEBUG) addEventListener('keydown', e => {
   if (e.code === 'Backquote') dbg.hidden = !dbg.hidden;
-  if (e.code === 'Digit0') for (let i = 0; zombies.length < MAX_ZOMBIES; i++) spawnOne(i % 3 === 0); // fills to the cap
+  if (e.code === 'Digit0' && game.state === 'play') for (let i = 0; zombies.length < MAX_ZOMBIES; i++) spawnOne(i % 3 === 0); // fills to the cap
 });
 
 resetPlayer();
