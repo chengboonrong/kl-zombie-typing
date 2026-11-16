@@ -102,6 +102,7 @@ export function spawnZombie(word: string, runner: boolean, walkTime: number) {
 
   scene.add(g);
   const label = makeLabel(word);
+  label.position.set(g.position.x, 2.32, g.position.z);
   scene.add(label);
   zombies.push({
     g, parts, mats: parts.map(m => m.material), runner, base,
