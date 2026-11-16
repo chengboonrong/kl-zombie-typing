@@ -5,11 +5,11 @@ import { zombies, spawnZombie, updateZombies, clearZombies, setTyped, flinch, cu
 import { gunScene, gunCam, updatePistol, squirt } from './pistol';
 import { feel, updateFx, pop, hitStop } from './fx';
 import { initAudio, sfx } from './audio';
-import { keyChar, typeKey, newStats, type Stats } from './typing';
+import { keyChar, typeKey, newStats, wpm, accuracy, type Stats } from './typing';
 import { LEVELS, pickWord, type Lang } from './words';
 import { wordList } from './wordlists';
 import { waveSize, spawnInterval, runnerShare, walkTime } from './pace';
-import { t } from './strings';
+import { t, LEVEL_NAMES } from './strings';
 
 const DEBUG = new URLSearchParams(location.search).has('debug');
 
@@ -62,7 +62,8 @@ resize();
 // --- HUD and screens ---
 const $ = (id: string) => document.getElementById(id)!;
 const overlay = $('overlay'), logo = $('logo'), title = $('title'), body = $('body'), dbg = $('debug');
-const waveEl = $('wave'), hpEl = $('hp'), hpBar = $('hp-bar');
+const waveEl = $('wave'), curedEl = $('cured'), wpmEl = $('wpm'), hpEl = $('hp'), hpBar = $('hp-bar');
+const waveLabel = $('wave-label'), curedLabel = $('cured-label'), wpmLabel = $('wpm-label');
 const hurtEl = $('hurt'), bannerEl = $('banner'), hpPanel = $('p-hp');
 dbg.hidden = !DEBUG;
 if (DEBUG) {
@@ -70,6 +71,8 @@ if (DEBUG) {
     player, game, zombies, solids, camera,
     get lock() { return lock; },
     get stats() { return stats; },
+    get lang() { return lang; },
+    get levelIndex() { return levelIndex; },
   };
 }
 
@@ -93,23 +96,69 @@ function banner(text: string) {
   bannerEl.classList.add('show');
 }
 
+// --- language and level (remembered between visits) ---
+function load<T>(key: string, ok: (v: string) => T | null, fallback: T): T {
+  try {
+    const v = localStorage.getItem(key);
+    const r = v === null ? null : ok(v);
+    return r === null ? fallback : r;
+  } catch { return fallback; }
+}
+function save(key: string, value: string) {
+  try { localStorage.setItem(key, value); } catch { /* storage blocked: choice just isn't remembered */ }
+}
+let lang: Lang = load<Lang>('lang', v => (v === 'en' || v === 'bm' ? v : null), 'en');
+let levelIndex = load('level', v => (/^\d+$/.test(v) && +v < LEVELS.length ? +v : null), 0);
+
+function applyLang() {
+  document.documentElement.lang = lang === 'bm' ? 'ms' : 'en';
+  put(waveLabel, t(lang, 'hudWave'));
+  put(curedLabel, t(lang, 'hudCured'));
+  put(wpmLabel, t(lang, 'hudWpm'));
+}
+function setLang(l: Lang) {
+  lang = l;
+  save('lang', l);
+  applyLang();
+  showScreen();
+}
+function setLevel(i: number) {
+  levelIndex = Math.max(0, Math.min(LEVELS.length - 1, i));
+  save('level', String(levelIndex));
+  showScreen();
+}
+
+const esc = (s: string) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
+
 function showScreen() {
   const s = game.state;
   overlay.style.display = s === 'play' ? 'none' : 'flex';
-  logo.hidden = s !== 'title';
-  title.hidden = s === 'title';
-  if (s === 'title') body.innerHTML = 'ENTER OR CLICK TO START';
-  if (s === 'pause') { title.innerHTML = 'PAUSED'; body.innerHTML = 'ENTER OR CLICK TO RESUME'; }
-  if (s === 'over') {
-    title.innerHTML = 'GAME OVER!';
-    body.innerHTML = `WAVES SURVIVED: ${Math.max(0, game.wave - 1)}<br>ENTER OR CLICK TO PLAY AGAIN`;
+  overlay.style.cursor = s === 'nokeyboard' ? 'default' : 'pointer';
+  logo.hidden = s !== 'title' && s !== 'nokeyboard';
+  title.hidden = s === 'title' || s === 'nokeyboard';
+  if (s === 'nokeyboard') {
+    body.innerHTML = `${t('bm', 'keyboard')}<br>${t('en', 'keyboard')}`;
+  } else if (s === 'title') {
+    body.innerHTML = `<span class="badge">TAIP!</span><br>
+      <span class="arrow" data-act="lang-prev">&#9664;</span>
+      <span class="pill${lang === 'en' ? ' on' : ''}" data-act="en">English</span>
+      <span class="pill${lang === 'bm' ? ' on' : ''}" data-act="bm">Bahasa Melayu</span>
+      <span class="arrow" data-act="lang-next">&#9654;</span><br>
+      <span class="arrow" data-act="level-up">&#9650;</span>${LEVEL_NAMES[lang][levelIndex]}<span class="arrow" data-act="level-down">&#9660;</span><br>
+      ${t(lang, 'choose')}<br>${t(lang, 'how')}<br>${t(lang, 'start')}`;
+  } else if (s === 'pause') {
+    title.textContent = t(lang, 'paused');
+    body.textContent = t(lang, 'resume');
+  } else if (s === 'over') {
+    title.textContent = t(lang, 'over');
+    const missed = [...stats.missed].slice(0, 12).map(esc).join(', ');
+    body.innerHTML = `${t(lang, 'wpm')}: ${wpm(stats)}<br>${t(lang, 'accuracy')}: ${accuracy(stats)}%<br>
+      ${t(lang, 'cured')}: ${stats.cured}<br>${t(lang, 'waves')}: ${Math.max(0, game.wave - 1)}<br>
+      ${missed ? `${t(lang, 'practise')}:<div class="missed">${missed}</div>` : ''}${t(lang, 'again')}`;
   }
 }
 
 // --- waves and typing ---
-// Task 7 adds the language and level picker; until then these are fixed.
-let lang: Lang = 'en';
-let levelIndex = 1;
 let list: string[] = [];
 let avgLen = 0;
 let lock: number | null = null;
@@ -201,7 +250,7 @@ function onKey(e: KeyboardEvent) {
 // --- start and pause ---
 let clickGuard = 0;
 function start() {
-  if (game.state === 'play' || performance.now() < clickGuard) return;
+  if (game.state === 'play' || game.state === 'nokeyboard' || performance.now() < clickGuard) return;
   initAudio();
   if (game.state !== 'pause') newGame();
   game.state = 'play';
@@ -212,22 +261,43 @@ function pause() {
   game.state = 'pause';
   showScreen();
 }
-overlay.addEventListener('click', start);
+const ACTIONS: Record<string, () => void> = {
+  en: () => setLang('en'),
+  bm: () => setLang('bm'),
+  'lang-prev': () => setLang('en'),
+  'lang-next': () => setLang('bm'),
+  'level-up': () => setLevel(levelIndex - 1),
+  'level-down': () => setLevel(levelIndex + 1),
+};
+overlay.addEventListener('click', e => {
+  const act = (e.target as HTMLElement).closest<HTMLElement>('[data-act]')?.dataset.act;
+  if (act && game.state === 'title') ACTIONS[act]();
+  else start();
+});
 addEventListener('keydown', e => {
+  if (game.state === 'nokeyboard') return;
+  if (game.state === 'title') {
+    const act = ({ ArrowLeft: 'lang-prev', ArrowRight: 'lang-next', ArrowUp: 'level-up', ArrowDown: 'level-down' } as Record<string, string>)[e.code];
+    if (act) { e.preventDefault(); ACTIONS[act](); return; }
+  }
   if (e.code === 'Enter') start();
-  if (e.code === 'Escape') pause();
-  else if (game.state === 'play') onKey(e);
+  if (e.code === 'Escape') {
+    if (game.state === 'over' && performance.now() >= clickGuard) { game.state = 'title'; showScreen(); }
+    else pause();
+  } else if (game.state === 'play') onKey(e);
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
 addEventListener('blur', pause);
 
 if (DEBUG) addEventListener('keydown', e => {
   if (e.code === 'Backquote') dbg.hidden = !dbg.hidden;
-  if (e.code === 'KeyZ') for (let i = 0; i < MAX_ZOMBIES; i++) spawnOne(i % 3 === 0); // fills to the cap
+  if (e.code === 'Digit0') for (let i = 0; zombies.length < MAX_ZOMBIES; i++) spawnOne(i % 3 === 0); // fills to the cap
 });
 
 resetPlayer();
 updatePlayer(0, null);
+if (matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches) game.state = 'nokeyboard';
+applyLang();
 showScreen();
 
 let last = performance.now(), frames = 0, fpsT = 0, fps = 0;
@@ -260,6 +330,8 @@ function frame(now: number) {
 
   put(waveEl, String(game.wave));
   put(hpEl, String(player.hp));
+  put(curedEl, String(stats.cured));
+  put(wpmEl, String(wpm(stats)));
   updateHud();
   const hurtO = (player.hurtT / 0.3).toFixed(2);
   if (hurtEl.style.opacity !== hurtO) hurtEl.style.opacity = hurtO;
